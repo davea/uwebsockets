@@ -2,14 +2,18 @@
 Websockets protocol
 """
 
-import logging
+#import logging
 import ure as re
 import ustruct as struct
 import urandom as random
 import usocket as socket
 from ucollections import namedtuple
 
-LOGGER = logging.getLogger(__name__)
+#LOGGER = logging.getLogger(__name__)
+class LOGGER:
+    @classmethod
+    def debug(self, *args, **kwargs):
+        print(*args)
 
 # Opcodes
 OP_CONT = const(0x0)
@@ -58,6 +62,7 @@ class Websocket:
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        LOGGER.debug("exited context manager")
         self.close()
 
     def settimeout(self, timeout):
@@ -70,32 +75,43 @@ class Websocket:
         """
 
         # Frame header
-        byte1, byte2 = struct.unpack('!BB', self._sock.read(2))
+        byte1, byte2 = struct.unpack('!BB', self._sock.recv(2))
+
+        LOGGER.debug("read a frame header: {} {}".format(byte1, byte2))
 
         # Byte 1: FIN(1) _(1) _(1) _(1) OPCODE(4)
         fin = bool(byte1 & 0x80)
         opcode = byte1 & 0x0f
+
 
         # Byte 2: MASK(1) LENGTH(7)
         mask = bool(byte2 & (1 << 7))
         length = byte2 & 0x7f
 
         if length == 126:  # Magic number, length header is 2 bytes
-            length, = struct.unpack('!H', self._sock.read(2))
+            print("length is 126")
+            length, = struct.unpack('!H', self._sock.recv(2))
         elif length == 127:  # Magic number, length header is 8 bytes
-            length, = struct.unpack('!Q', self._sock.read(8))
+            print("length is 127")
+            length, = struct.unpack('!Q', self._sock.recv(8))
+        else:
+            print("length is something else: {}".format(length))
 
         if mask:  # Mask is 4 bytes
-            mask_bits = self._sock.read(4)
+            mask_bits = self._sock.recv(4)
 
-        try:
-            data = self._sock.read(length)
-        except MemoryError:
-            # We can't receive this many bytes, close the socket
-            if __debug__: LOGGER.debug("Frame of length %s too big. Closing",
-                                       length)
-            self.close(code=CLOSE_TOO_BIG)
-            return True, OP_CLOSE, None
+        if length:
+            print("Trying to receive {} bytes".format(length))
+            try:
+                data = self._sock.recv(length)
+            except MemoryError:
+                # We can't receive this many bytes, close the socket
+                LOGGER.debug("Frame of length %s too big. Closing",
+                                        length)
+                self.close(code=CLOSE_TOO_BIG)
+                return True, OP_CLOSE, None
+        else:
+            data = b''
 
         if mask:
             data = bytes(b ^ mask_bits[i % 4]
@@ -123,27 +139,27 @@ class Websocket:
 
         if length < 126:  # 126 is magic value to use 2-byte length header
             byte2 |= length
-            self._sock.write(struct.pack('!BB', byte1, byte2))
+            self._sock.send(struct.pack('!BB', byte1, byte2))
 
         elif length < (1 << 16):  # Length fits in 2-bytes
             byte2 |= 126  # Magic code
-            self._sock.write(struct.pack('!BBH', byte1, byte2, length))
+            self._sock.send(struct.pack('!BBH', byte1, byte2, length))
 
         elif length < (1 << 64):
             byte2 |= 127  # Magic code
-            self._sock.write(struct.pack('!BBQ', byte1, byte2, length))
+            self._sock.send(struct.pack('!BBQ', byte1, byte2, length))
 
         else:
             raise ValueError()
 
         if mask:  # Mask is 4 bytes
             mask_bits = struct.pack('!I', random.getrandbits(32))
-            self._sock.write(mask_bits)
+            self._sock.send(mask_bits)
 
             data = bytes(b ^ mask_bits[i % 4]
                          for i, b in enumerate(data))
 
-        self._sock.write(data)
+        self._sock.send(data)
 
     def recv(self):
         """
@@ -164,6 +180,7 @@ class Websocket:
                 self._close()
                 return
 
+            LOGGER.debug("Got a frame with opcode {}".format(opcode))
             if not fin:
                 raise NotImplementedError()
 
@@ -172,6 +189,7 @@ class Websocket:
             elif opcode == OP_BYTES:
                 return data
             elif opcode == OP_CLOSE:
+                LOGGER.debug("got a close frame")
                 self._close()
                 return
             elif opcode == OP_PONG:
@@ -179,7 +197,7 @@ class Websocket:
                 continue
             elif opcode == OP_PING:
                 # We need to send a pong frame
-                if __debug__: LOGGER.debug("Sending PONG")
+                LOGGER.debug("Sending PONG")
                 self.write_frame(OP_PONG, data)
                 # And then wait to receive
                 continue
@@ -215,6 +233,20 @@ class Websocket:
         self._close()
 
     def _close(self):
-        if __debug__: LOGGER.debug("Connection closed")
+        LOGGER.debug("Connection closed")
         self.open = False
         self._sock.close()
+
+def readline(sock):
+    try:
+        return sock.readline()[:-2]
+    except AttributeError:
+        line = b''
+        while True:
+            chunk = sock.recv(2)
+            if chunk == b'\r\n':
+                print("Read line:")
+                print(line)
+                return line
+            else:
+                line += chunk

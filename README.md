@@ -1,4 +1,7 @@
-# Micropython websockets (esp8266 implementation)
+# Micropython websockets
+
+**NB** this is forked from [danni/uwebsockets](https://github.com/danni/uwebsockets)
+and hacked up a bit to work on the TiLDA.
 
 An implementation of websockets for the ESP8266 (client only ATM). This is a
 work in progress, some of which might move into the modwebsocket C module
